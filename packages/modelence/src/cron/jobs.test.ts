@@ -10,10 +10,11 @@ const mockStartTransaction = vi.fn(() => ({
 const mockCaptureError = vi.fn();
 const mockAcquireLock: Mock = vi.fn();
 
-const cronStoreMocks: { fetch: Mock; updateOne: Mock; upsertOne: Mock } = {
+const cronStoreMocks: { fetch: Mock; updateOne: Mock; upsertOne: Mock; insertMany: Mock } = {
   fetch: vi.fn(),
   updateOne: vi.fn(),
   upsertOne: vi.fn(),
+  insertMany: vi.fn(),
 };
 
 function registerMocks() {
@@ -43,6 +44,7 @@ describe('cron/jobs', () => {
   let defineCronJob: typeof import('./jobs').defineCronJob;
   let startCronJobs: typeof import('./jobs').startCronJobs;
   let getCronJobsMetadata: typeof import('./jobs').getCronJobsMetadata;
+  let registerNewCronJobs: typeof import('./jobs').registerNewCronJobs;
   let intervalCallback: (() => Promise<void>) | null;
   let intervalDelay: number | undefined;
   let setIntervalMock: MockInstance;
@@ -55,6 +57,7 @@ describe('cron/jobs', () => {
       fetch: vi.fn(),
       updateOne: vi.fn().mockResolvedValue(undefined as never),
       upsertOne: vi.fn().mockResolvedValue(undefined as never),
+      insertMany: vi.fn().mockResolvedValue(undefined as never),
     });
     mockAcquireLock.mockResolvedValue(true as never);
     intervalCallback = null;
@@ -69,7 +72,8 @@ describe('cron/jobs', () => {
     }) as unknown as typeof setInterval);
     registerMocks();
     consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    ({ defineCronJob, startCronJobs, getCronJobsMetadata } = await import('./jobs'));
+    ({ defineCronJob, startCronJobs, getCronJobsMetadata, registerNewCronJobs } =
+      await import('./jobs'));
   });
 
   afterEach(() => {
@@ -178,5 +182,68 @@ describe('cron/jobs', () => {
     expect(mockCaptureError).toHaveBeenCalledWith(expect.any(Error));
     const transaction = mockStartTransaction.mock.results.slice(-1)[0]?.value as { end: Mock };
     expect(transaction.end).toHaveBeenCalledWith('error');
+  });
+
+  describe('registerNewCronJobs', () => {
+    test('no-ops when no cron jobs are defined', async () => {
+      await registerNewCronJobs();
+
+      expect(cronStoreMocks.fetch).not.toHaveBeenCalled();
+      expect(cronStoreMocks.insertMany).not.toHaveBeenCalled();
+    });
+
+    test('inserts only jobs that are not already in the DB', async () => {
+      defineCronJob('existingJob', {
+        interval: mockSeconds(10),
+        handler: async () => {},
+      });
+      defineCronJob('newJob', {
+        interval: mockSeconds(10),
+        handler: async () => {},
+      });
+      cronStoreMocks.fetch.mockResolvedValue([{ alias: 'existingJob' }] as never);
+
+      await registerNewCronJobs();
+
+      expect(cronStoreMocks.fetch).toHaveBeenCalledWith({
+        alias: { $in: expect.arrayContaining(['existingJob', 'newJob']) },
+      });
+      expect(cronStoreMocks.insertMany).toHaveBeenCalledWith([{ alias: 'newJob' }]);
+    });
+
+    test('does not call insertMany when all jobs are already registered', async () => {
+      defineCronJob('alreadyRegistered', {
+        interval: mockSeconds(10),
+        handler: async () => {},
+      });
+      cronStoreMocks.fetch.mockResolvedValue([{ alias: 'alreadyRegistered' }] as never);
+
+      await registerNewCronJobs();
+
+      expect(cronStoreMocks.insertMany).not.toHaveBeenCalled();
+    });
+
+    test('rethrows when fetch throws', async () => {
+      defineCronJob('myJob', {
+        interval: mockSeconds(10),
+        handler: async () => {},
+      });
+      const fetchError = new Error('DB fetch failed');
+      cronStoreMocks.fetch.mockRejectedValue(fetchError as never);
+
+      await expect(registerNewCronJobs()).rejects.toThrow('DB fetch failed');
+    });
+
+    test('rethrows when insertMany throws', async () => {
+      defineCronJob('myJob', {
+        interval: mockSeconds(10),
+        handler: async () => {},
+      });
+      cronStoreMocks.fetch.mockResolvedValue([] as never);
+      const insertError = new Error('DB insert failed');
+      cronStoreMocks.insertMany.mockRejectedValue(insertError as never);
+
+      await expect(registerNewCronJobs()).rejects.toThrow('DB insert failed');
+    });
   });
 });

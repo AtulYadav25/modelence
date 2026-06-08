@@ -864,6 +864,41 @@ describe('app/index', () => {
     expect(mockReleaseLock).toHaveBeenCalledWith('migrations');
   });
 
+  test('registerNewCronJobs is called inside the migrations lock and skipped when lock is not acquired', async () => {
+    mockGetMongodbUri.mockReturnValue('mongodb://localhost:27017/test');
+    mockGetClient.mockReturnValue({ db: vi.fn() });
+
+    // Lock acquired: registerNewCronJobs should be called
+    mockAcquireLock.mockResolvedValue(true);
+    await startApp({});
+    expect(mockRegisterNewCronJobs).toHaveBeenCalledTimes(1);
+
+    vi.clearAllMocks();
+    mockStartCronJobs.mockResolvedValue(undefined);
+    mockRegisterNewCronJobs.mockResolvedValue(undefined);
+    mockResolveStores.mockImplementation((stores: unknown[]) => ({
+      storesToInit: stores,
+      effectiveStores: stores,
+    }));
+
+    // Lock not acquired: registerNewCronJobs should NOT be called
+    mockAcquireLock.mockResolvedValue(false);
+    await startApp({});
+    expect(mockRegisterNewCronJobs).not.toHaveBeenCalled();
+  });
+
+  test('registerNewCronJobs failure releases the migrations lock and propagates the error', async () => {
+    mockGetMongodbUri.mockReturnValue('mongodb://localhost:27017/test');
+    mockGetClient.mockReturnValue({ db: vi.fn() });
+
+    const cronError = new Error('cron registration failed');
+    mockRegisterNewCronJobs.mockRejectedValue(cronError);
+
+    await expect(startApp({})).rejects.toThrow('cron registration failed');
+
+    expect(mockReleaseLock).toHaveBeenCalledWith('migrations');
+  });
+
   test('starts server with combined modules and channels', async () => {
     const channel1 = new ServerChannel('channel1');
     const channel2 = new ServerChannel('channel2');

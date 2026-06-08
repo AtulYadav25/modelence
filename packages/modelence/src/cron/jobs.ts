@@ -72,29 +72,22 @@ export async function registerNewCronJobs() {
     return;
   }
 
-  const hasLock = await acquireLock('cron-registration', {
-    lockDuration: time.seconds(10),
-    successfulLockCacheDuration: time.seconds(5),
-    failedLockCacheDuration: time.seconds(2),
-  });
-  if (!hasLock) {
-    return;
-  }
+  try {
+    const aliasSelector = { alias: { $in: aliasList } };
+    const existingCronJobs = await cronJobsCollection.fetch(aliasSelector);
+    const existingCronJobAliases = new Set(existingCronJobs.map((job) => job.alias));
 
-  const aliasSelector = { alias: { $in: aliasList } };
-  const existingCronJobs = await cronJobsCollection.fetch(aliasSelector);
-  const existingCronJobAliases = new Set(existingCronJobs.map((job) => job.alias));
+    const insertItems = Object.values(cronJobs)
+      .filter((job) => !existingCronJobAliases.has(job.alias))
+      .map((job) => ({
+        alias: job.alias,
+      }));
 
-  // Skips already added cron jobs and adds only new ones.
-  // lastStartDate is intentionally omitted for new jobs so that startCronJobs
-  // schedules their first run immediately.
-  const insertItems = Object.values(cronJobs)
-    .filter((job) => !existingCronJobAliases.has(job.alias))
-    .map((job) => ({
-      alias: job.alias,
-    }));
-  if (insertItems.length > 0) {
-    await cronJobsCollection.insertMany(insertItems);
+    if (insertItems.length > 0) {
+      await cronJobsCollection.insertMany(insertItems);
+    }
+  } catch (error) {
+    throw error;
   }
 }
 

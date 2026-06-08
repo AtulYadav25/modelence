@@ -179,7 +179,6 @@ export async function startApp({
     const allStoresToInit = [...new Set([...storesToInit, ...effectiveStores])];
     initStores(allStoresToInit);
     await createIndexesAndMigrationsWithLock(effectiveStores, migrations);
-    await registerNewCronJobs();
   } else {
     startMigrations(migrations);
   }
@@ -261,6 +260,7 @@ async function createIndexesAndMigrationsWithLock(
     for (const store of backgroundStores) {
       await createStoreIndexes(store, 'drop-only');
     }
+    await registerNewCronJobs();
   } catch (error) {
     await releaseLock(MIGRATIONS_LOCK_RESOURCE);
     throw error;
